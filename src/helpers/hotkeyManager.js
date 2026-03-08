@@ -1,6 +1,7 @@
 const { globalShortcut } = require("electron");
 const debugLogger = require("./debugLogger");
 const GnomeShortcutManager = require("./gnomeShortcut");
+const PortalShortcutManager = require("./portalShortcut");
 const { i18nMain } = require("./i18nMain");
 
 // Delay to ensure localStorage is accessible after window load
@@ -65,6 +66,8 @@ class HotkeyManager {
     this.isListeningMode = false;
     this.gnomeManager = null;
     this.useGnome = false;
+    this.portalManager = null;
+    this.usePortal = false;
   }
 
   // Backward-compatible property accessors
@@ -324,6 +327,46 @@ class HotkeyManager {
     }
   }
 
+  async initializePortalShortcuts() {
+    if (process.platform !== "linux" || !GnomeShortcutManager.isWayland()) {
+      return false;
+    }
+
+    try {
+      const available = await PortalShortcutManager.checkAvailability();
+      if (!available) {
+        debugLogger.log("[HotkeyManager] XDG GlobalShortcuts portal not available");
+        return false;
+      }
+
+      this.portalManager = new PortalShortcutManager();
+      this.usePortal = true;
+      debugLogger.log("[HotkeyManager] XDG GlobalShortcuts portal is available");
+
+      // Clean up any stale GNOME gsettings keybinding from previous runs.
+      // If left active, it fires Toggle() via dbus-send in parallel with the
+      // portal's Activated/Deactivated signals, causing rapid recording cycling.
+      try {
+        const cleanupManager = new GnomeShortcutManager();
+        await cleanupManager.unregisterKeybinding();
+        debugLogger.log("[HotkeyManager] Cleaned up stale GNOME gsettings keybinding");
+      } catch (err) {
+        debugLogger.log("[HotkeyManager] gsettings cleanup (non-fatal):", err.message);
+      }
+
+      return true;
+    } catch (err) {
+      debugLogger.log("[HotkeyManager] Portal shortcut init failed:", err.message);
+      this.portalManager = null;
+      this.usePortal = false;
+      return false;
+    }
+  }
+
+  isUsingPortal() {
+    return this.usePortal;
+  }
+
   async initializeGnomeShortcuts(callback) {
     if (process.platform !== "linux" || !GnomeShortcutManager.isWayland()) {
       return false;
@@ -358,6 +401,34 @@ class HotkeyManager {
     this.hotkeyCallback = callback;
 
     if (process.platform === "linux" && GnomeShortcutManager.isWayland()) {
+      // Try XDG Desktop Portal GlobalShortcuts first (GNOME 48+, KDE 5.27+).
+      // This supports both tap and push-to-talk via Activated/Deactivated signals.
+      const portalOk = await this.initializePortalShortcuts();
+      if (portalOk) {
+        // Portal shortcut binding is deferred to main.js where the portal
+        // manager's start() is called after a startup delay. We just need to
+        // read the saved hotkey so it's available when main.js calls start().
+        const initPortalHotkey = async () => {
+          try {
+            const savedHotkey = await mainWindow.webContents.executeJavaScript(`
+              localStorage.getItem("dictationKey") || ""
+            `);
+            this.currentHotkey =
+              savedHotkey && savedHotkey.trim() !== "" ? savedHotkey : "Control+Super";
+            debugLogger.log(
+              `[HotkeyManager] Portal mode — saved hotkey: "${this.currentHotkey}"`
+            );
+          } catch (err) {
+            this.currentHotkey = "Control+Super";
+            debugLogger.log("[HotkeyManager] Portal mode — using default hotkey");
+          }
+        };
+        setTimeout(initPortalHotkey, HOTKEY_REGISTRATION_DELAY_MS);
+        this.isInitialized = true;
+        return;
+      }
+
+      // Fallback: legacy GNOME gsettings/dbus-send approach (tap-only, no PTT)
       const gnomeOk = await this.initializeGnomeShortcuts(callback);
 
       if (gnomeOk) {
@@ -537,6 +608,19 @@ class HotkeyManager {
     }
 
     try {
+      if (this.usePortal && this.portalManager) {
+        debugLogger.log(`[HotkeyManager] Updating portal hotkey to "${hotkey}"`);
+        await this.portalManager.updateShortcut(hotkey);
+        this.currentHotkey = hotkey;
+        const saved = await this.saveHotkeyToRenderer(hotkey);
+        if (!saved) {
+          debugLogger.warn(
+            "[HotkeyManager] Portal hotkey updated but failed to persist to localStorage"
+          );
+        }
+        return { success: true, message: `Hotkey updated to: ${hotkey} (via XDG Portal)` };
+      }
+
       if (this.useGnome && this.gnomeManager) {
         debugLogger.log(`[HotkeyManager] Updating GNOME hotkey to "${hotkey}"`);
         const gnomeHotkey = GnomeShortcutManager.convertToGnomeFormat(hotkey);
@@ -590,6 +674,12 @@ class HotkeyManager {
   }
 
   unregisterAll() {
+    if (this.portalManager) {
+      this.portalManager.stop();
+      this.portalManager = null;
+      this.usePortal = false;
+    }
+
     if (this.gnomeManager) {
       this.gnomeManager.unregisterKeybinding().catch((err) => {
         debugLogger.warn("[HotkeyManager] Error unregistering GNOME keybinding:", err.message);

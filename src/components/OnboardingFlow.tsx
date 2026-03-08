@@ -150,7 +150,7 @@ export default function OnboardingFlow({ onComplete }: OnboardingFlowProps) {
     const checkHotkeyMode = async () => {
       try {
         const info = await window.electronAPI?.getHotkeyModeInfo();
-        if (info?.isUsingGnome) {
+        if (info?.isUsingGnome && !info?.supportsPushToTalk) {
           setIsUsingGnomeHotkeys(true);
           setActivationMode("tap");
         }

@@ -403,6 +403,61 @@ class WindowManager {
     this.winPushState = null;
   }
 
+  // Linux Wayland push-to-talk via XDG Portal GlobalShortcuts
+  // (mirrors the Windows push-to-talk pattern above)
+
+  startLinuxPushToTalk() {
+    if (this.linuxPushState?.active) {
+      return;
+    }
+
+    const MIN_HOLD_DURATION_MS = 150;
+    const downTime = Date.now();
+
+    if (this.textEditMonitor) this.textEditMonitor.captureTargetPid();
+    this.showDictationPanel();
+
+    this.linuxPushState = {
+      active: true,
+      downTime,
+      isRecording: false,
+    };
+
+    setTimeout(() => {
+      if (!this.linuxPushState || this.linuxPushState.downTime !== downTime) {
+        return;
+      }
+
+      if (!this.linuxPushState.isRecording) {
+        this.linuxPushState.isRecording = true;
+        this.sendStartDictation();
+      }
+    }, MIN_HOLD_DURATION_MS);
+  }
+
+  handleLinuxPushKeyUp() {
+    if (!this.linuxPushState?.active) {
+      return;
+    }
+
+    const wasRecording = this.linuxPushState.isRecording;
+    this.linuxPushState = null;
+
+    if (wasRecording) {
+      this.sendStopDictation();
+    } else {
+      this.hideDictationPanel();
+    }
+  }
+
+  resetLinuxPushState() {
+    this.linuxPushState = null;
+  }
+
+  isUsingPortalShortcuts() {
+    return this.hotkeyManager?.isUsingPortal() ?? false;
+  }
+
   sendToggleDictation() {
     if (this.hotkeyManager.isInListeningMode()) {
       return;

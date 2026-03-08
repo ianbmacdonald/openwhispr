@@ -1237,8 +1237,12 @@ class IPCHandlers {
     });
 
     ipcMain.handle("get-hotkey-mode-info", async () => {
+      const isUsingGnome = this.windowManager.isUsingGnomeHotkeys();
+      const isUsingPortal = this.windowManager.isUsingPortalShortcuts();
       return {
-        isUsingGnome: this.windowManager.isUsingGnomeHotkeys(),
+        isUsingGnome: isUsingGnome && !isUsingPortal, // legacy GNOME = no PTT
+        isUsingPortal, // portal = has PTT
+        supportsPushToTalk: !isUsingGnome || isUsingPortal,
       };
     });
 

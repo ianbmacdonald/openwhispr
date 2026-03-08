@@ -911,6 +911,70 @@ async function startApp() {
       }
     });
   }
+
+  // Set up Linux Wayland Portal Push-to-Talk handling
+  if (
+    process.platform === "linux" &&
+    process.env.XDG_SESSION_TYPE === "wayland" &&
+    hotkeyManager.isUsingPortal() &&
+    hotkeyManager.portalManager
+  ) {
+    debugLogger.debug("[Push-to-Talk] Linux Wayland Portal setup starting");
+
+    const portalManager = hotkeyManager.portalManager;
+
+    portalManager.on("key-down", () => {
+      if (!isLiveWindow(windowManager.mainWindow)) return;
+
+      const activationMode = windowManager.getActivationMode();
+      debugLogger.log(`[Portal-PTT] key-down received, activationMode="${activationMode}"`);
+      if (activationMode === "push") {
+        windowManager.startLinuxPushToTalk();
+      } else if (activationMode === "tap") {
+        windowManager.sendToggleDictation();
+      }
+    });
+
+    portalManager.on("key-up", () => {
+      if (!isLiveWindow(windowManager.mainWindow)) return;
+
+      const activationMode = windowManager.getActivationMode();
+      debugLogger.log(`[Portal-PTT] key-up received, activationMode="${activationMode}"`);
+      if (activationMode === "push") {
+        windowManager.handleLinuxPushKeyUp();
+      }
+    });
+
+    portalManager.on("error", (error) => {
+      debugLogger.warn("[Push-to-Talk] Portal shortcut error", { error: error.message });
+    });
+
+    portalManager.on("ready", () => {
+      debugLogger.debug("[Push-to-Talk] Portal shortcuts ready and listening");
+    });
+
+    // Start the portal listener after a delay to allow the app to fully initialize
+    const startPortalListener = async () => {
+      const currentHotkey = hotkeyManager.getCurrentHotkey();
+      if (currentHotkey) {
+        await portalManager.start(currentHotkey);
+      }
+    };
+
+    const PORTAL_STARTUP_DELAY_MS = 2000;
+    setTimeout(startPortalListener, PORTAL_STARTUP_DELAY_MS);
+
+    ipcMain.on("activation-mode-changed", (_event, _mode) => {
+      windowManager.resetLinuxPushState();
+    });
+
+    ipcMain.on("hotkey-changed", async (_event, hotkey) => {
+      windowManager.resetLinuxPushState();
+      if (portalManager.isReady) {
+        await portalManager.updateShortcut(hotkey);
+      }
+    });
+  }
 }
 
 // Listen for usage limit reached from dictation overlay, forward to control panel
