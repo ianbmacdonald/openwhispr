@@ -182,7 +182,12 @@ test("connection identity follows key saves exactly when the token comes from a 
         return "key";
       };
       // The self-hosted entry releases its key only for a connection naming its server.
-      const options = { provider, mode, purpose: "meeting", url: "ws://127.0.0.1:9000/v1/realtime" };
+      const options = {
+        provider,
+        mode,
+        purpose: "meeting",
+        url: "ws://127.0.0.1:9000/v1/realtime",
+      };
       await fetchRealtimeTokenForProvider(
         provider,
         {
@@ -278,10 +283,11 @@ test("policy judges a saved-key provider as bring-your-own-key whatever mode the
 
   assert.ok(SAVED_KEY_PROVIDERS.has("elevenlabs-realtime"));
   for (const provider of SAVED_KEY_PROVIDERS) {
-    assert.deepEqual(
-      realtimeSelection({ provider, mode: "openwhispr" }),
-      { mode: "providers", provider: provider.replace(/-realtime$/, "") },
-      provider
-    );
+    // A self-hosted server's optional key is saved too, but the policy judges it as Self-Hosted.
+    const expected =
+      provider === "openai-compatible-realtime"
+        ? { mode: "self-hosted", provider: "openai-compatible" }
+        : { mode: "providers", provider: provider.replace(/-realtime$/, "") };
+    assert.deepEqual(realtimeSelection({ provider, mode: "openwhispr" }), expected, provider);
   }
 });
